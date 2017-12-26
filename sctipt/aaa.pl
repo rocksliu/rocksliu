@@ -10,28 +10,38 @@ USAGE:
 -i2: Undetermined_R2        [option]
 -o:  outdir
 -s:  sample and index       [sample1:index1,sample2:index2,.....] 
--m:  mismatch               [default:0]      
+-m:  max mismatch           [default:0]
+-p： max threads            [default:20]     
 USAGE
-my ($i1,$o,$i2,$s,$m);
+my ($i1,$o,$i2,$s,$m,$max_treads);
 GetOptions
 (
 "i1:s"  =>\$i1,
 "o:s"  =>\$o,
 "i2:s"  =>\$i2,
 "m:s"  =>\$m,
+"p:s"  =>\$max_treads,
 "s:s"  =>\$s
 );
 die "$help" unless( defined  $i1 and $s and $o);
 $m ||= 0;
-my $max_treads=10;
+$max_treads||=20;
 my $num_thread = 0;
 my %multi=();
 my @a=split/\,/,$s;
 foreach my $key (@a){
     my @b=split/\:/,$key;
     if($num_thread < $max_treads){
-        $multi{$key}= threads->create(\&abstract,$b[0],$b[1],$o,$i1,$i2,$m);
+        my $left=$b[0]."left";
+        my $o1=$b[0]."_R1_001.fastq.gz";		
+        $multi{$left}= threads->create(\&abstract_single,$b[1],"$o/$o1",$i1,$m);
         $num_thread ++;
+        if (defined $i2){
+            my $right=$b[0]."right";		 
+            my $o2=$b[0]."_R2_001.fastq.gz";		
+            $multi{$right}= threads->create(\&abstract_single,$b[1],"$o/$o2",$i2,$m);		
+            $num_thread ++;		
+        }		
     }else{
         while(1){
             my $break = 0;
@@ -66,24 +76,6 @@ while(%multi){
 # sub function
 # ------------------------------------------------------------------
 
-sub abstract{
-    my ($prefix,$barcode,$out,$Un1,$Un2,$mistach)=@_;
-    my $left=$prefix."_R1_001.fastq.gz";
-    my $right=$prefix."_R2_001.fastq.gz";	
-    my %pair=();
-    $pair{$left}= threads->create(\&abstract_single,$barcode,$left,$Un1,$mistach);
-    $pair{$right}= threads->create(\&abstract_single,$barcode,$right,$Un2,$mistach);	
-    while(%pair){
-        foreach my $file (keys %pair){
-            if($pair{$file} ->is_joinable()){
-               my $time = $pair{$file} ->join();
-               print STDERR "$time\n";
-               delete $pair{$file};
-            }
-        }
-    }
-}	
-
 sub abstract_single{
     my ($barcode,$out,$in,$max_mistach)=@_;	
     open (OUT,"| gzip >$out") or die $!;
@@ -96,20 +88,28 @@ sub abstract_single{
         chomp;
         s/\r//;
         next if (/^$/);
-        my @tmp=split /\s+/,$_;
+        my $first=$_;		
+        my @tmp=split /\s+/,$first;
         my $index=(split /\:/,$tmp[1])[3];
-        my $mismatch=&mismatch($index,$barcode);		
-        if ($mismatch <= $max_mistach){
-            print OUT $_."\n".<IN>.<IN>.<IN>;
+        #print "$index\n$barcode\n";die; 		
+        my $m_current=&chongfu($index,$barcode);
+        chomp(my $reads=<IN>);
+        chomp(my $names=<IN>);
+        chomp(my $quality=<IN>);  	
+        if ($m_current <= $max_mistach){
+            print OUT "$first\n$reads\n$names\n$quality\n";		
         } 			
     }
     close IN;
     close OUT;
 }	
 	
-sub mismatch{
-    my $in1=shift;
-    my $in2=shift;
+sub chongfu{
+    my ($in1,$in2)=@_;	
+    if(length($in1) != length($in2)){
+        print length($in1)."\n".length($in2)."\n";	
+        die	"the length of two index not equal\n";
+    }
     my $out=0;
     my @tmp1=split //,$in1;
     my @tmp2=split //,$in2;
@@ -121,6 +121,3 @@ sub mismatch{
     my $mismatch=scalar(@tmp1)-$out;
     return $mismatch;
 }
-
-
-
